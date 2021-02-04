@@ -1,0 +1,74 @@
+2008-01-03     Mensaje enviado por Patricio Keilty
+
+Ezequiel,
+
+acá te adjunto el proyecto original con las modificaciones sugeridas. En términos generales me llevo varias horas ya que la lógica original era bastante complicada por demás, haciendo difícil su comprensón. Rearmé la funcionalidad relativa al manejo del perfil de usuario y el login únicamente; verás que se simplificó bastante y el código no es redundante y está mejor organizado que el original. Queda para vos reformular el resto del trabajo para ajustarse a mi ejemplo, cuando se te presenten dudas respecto del diseño o veas mejores alternativas consultame. Te explico a continuación los cambios que realice y mis sugerencias para continuar, cualquier pregunta o inconveniente no dudes en consultarme.
+
+Respecto de la estructura del proyecto eclipse vas anotar los siguientes cambios:
+
+   1. EliminaUsuarioServlet, ModificaUsuarioServlet y RegistraUsuarioServlet se transofrmaron en un único UsuarioServlet. Toda la lógica para actualizar, borrar, registrar, listar está en este servlet distribuida convenientemente en métodos;  removí código que realizaba consultas hibernate en la jsp.
+   2. LoginServlet fue cambiado para simplificar la lógica también: por un lado hice mucho mas simple el código para loguear a un usuario y por otro lado moví todo lo relacionado con la obtención de HibernateSession a la clase dbServlets.Hiber8Manager.
+   3. El manejo de la HibernateSession en la clase UsuarioHome estaba mal, así que lo corregí; dejé sólo los métodos indispensables para realizar las consultas, agregando el findByExample().
+   4. Vas a ver cambios importantes en las siguientes JSP, donde eliminé código con muchos if..else if... anidados para el manejo de valores y errores de los campos de formularios, algo que se tornaba ilegible. Utilicé para esto una nueva clase utility. FieldValueError.
+          * do_modifica_usuario.jsp
+          * do_registra_usuario.jsp
+          * login.jsp
+   5. En header.jsp agregué el manejo de notificaciones para el usuario, con la ayuda de la nueva clase utility. UserNotification; removiendo el uso del campo estático "mensaje" presente en todas las clases.
+
+
+Respecto de la separación de lógica de la aplicación de la presentación
+
+No es deseable que dentro de una página JSP haya código que realice consultas a la base de datos, o que realice operaciones que son centrales a la aplicación. El objetivo de separar o distinguir las responsabilidades dentro del sistema en capas lógicas es para organizar mejor el código y permitir cambios o su evolución más fácilmente, hacer que sea mantenible. Estas capas suelen llamarse presentación, lógica de negocio (o de la aplicación), manejo de datos. En este proyecto se corresponden a: JSPs (presentación), servlets (lógica de la aplicación), Hiber8Manager y las XXXHome (manejo de datos).
+En una aplicación web como en este caso, entonces el flujo es el siguiente: los request http entran siempre a través de un servlet, que lleva adelante la lógica necesaria, validaciones, manejo de errores, y prepara los datos que necesita la capa de presentación para mostrar. Luego le pasa el control (mediante un forward) a la JSP correspondiente a través de atributos en el objeto request (NO en el objeto session), la JSP entonces tiene sólo la responsabilidad de mostrar los datos, formatearlos. Sólo en casos muy simples que no necesitan procesamiento previo se puede invocar a una JSP directamente.
+
+Veamos un ejemplo: la edición de los datos del usuario. Se accede a esta vista a través del url http://localhost:8080/Clinica/ModificaUsuarioServlet?accion=listar . El servlet UsuarioServlet se ocupa en el método auxiliar doListar() de realizar la consulta que obtiene todos los usuarios del sistema, lo alamacena en el atributo "lista_usuarios" en el objeto request, además obtiene los datos del usuario actualmente en la sesión y los almacena como atributos en el request empleando FieldValueError.setFieldValue(). También maneja los posibles errores de conexión a la b.b.d.d. e informa del error al usuario con UserNotification.addMessage(). Por último le pasa el control a la JSP mediante request.getRequestDispatcher("do_modifica_usuario.jsp").forward(request ,response). Ahora do_modifica_usuario.jsp sólo debe tomar los datos que necesita del request: obtiene la listaDeUsuarios del requestt y si no es vacía itera y la presenta en una tabla. Para armar el formulario y poblar los campos con los datos del usuario los obtiene también del request mediante FieldValueError.getFieldValue("nombreReal", request).
+
+De esta manera separamos las responsabilidades de cada parte y el código queda mucho mas claro. Aclaro que no me parece una buena práctica listar todos los usuarios en esta página, pero lo utilizo para introducir estos conceptos.
+
+Respecto del manejo de Hibernate Session
+
+Según el manual de Hiber8:
+
+    A SessionFactory is an expensive-to-create, threadsafe object intended to be shared by all application threads. It is created once, usually on application startup, from a Configuration instance. 
+
+Un SessionFactory es un objeto costoso de instanciar, seguro ante la ejecución de hilos, y su objetivo es ser compartido entre los distintos hilos de ejec. de la aplicación. Se debe crear una única vez, gralmente cuando arranca la app mediante una instancia de Configuration. Agrego que sirve para proveer una Session a las clases clientes, por eso es una factoria: crea Sessions.
+
+    A Session is an inexpensive, non-threadsafe object that should be used once, for a single request, a conversation, single unit of work, and then discarded. A Session will not obtain a JDBC Connection (or a Datasource) unless it is needed, hence consume no resources until used.
+
+Una Session is un objetivo fácil de instanciar, no es seguro para la ejecución multi-hilo, usado en un único request, conversación, unidad de trabajo, y luego descartada. Etc..... . Una Session de debe cerrar al terminar de usarse.
+
+            try {
+                session = Hiber8Manager.openHibernateSession();
+                transaccion = session.beginTransaction();
+                session.saveOrUpdate(usuario);
+                transaccion.commit();
+            } catch (HibernateException ex) {
+                if (transaccion != null)
+                    transaccion.rollback ();
+                throw ex;
+            } finally {
+                if (session != null)
+                    session.close();
+            }
+
+
+Una SessionFactory no debe ser destruida cuando el usuario hace un logout de la app; la SessionFactory es única para toda la aplicación y no está atada de ninguna forma a la HttpSession del usuario.
+El concepto de HibernateSession tampoco está atado al de HttpSession, si bien puede confundir su denominación no tienen absolutamente nada que ver. La HibernateSession se obtiene(abre) y luego se cierra en el contexto de una o varias consultas a la b.b.d.d. que forman una serie de operaciones relacionadas en un período de tiempo no muy extenso; por eso menciona el manual un request http. Durante la vida de la HttpSession, asociada a un usuario de nuestra aplicación (desde el login hasta el logout), se abren y se cierran muchas HibernateSession.
+
+Respecto de los valores y errores en los campos de formularios
+
+Una sola clase auxilia en la manipulación de  los valores y errores de los campos de los forms: FieldValueError. Es de propósito general, puede ser usada desde cualquier servlet y se encarga de almacenar como atributo del request mapas con los valores y errores cuya clave es el nombre del campo, permitiendo entonces en las JSP obtener el value o la descripción del error de un campo por su nombre.
+
+Respecto de los mensajes al usuario
+
+Mensajes de error como "Error: El Usuario obtenido de la HttpSession no puede ser nulo!"no debe ser mostrado al usuario, ya que no es capaz de interpretarlo, tampoco puede hacer nada para corregirlo por lo tanto no tiene sentido para él. Sugiero que emplees en cambio un mensaje algo mas claro de ser necesario, por ej: "Ha ocurrido un error al acceder a la base de datos. Por favor comuníquelo al administrador del sitio."
+Para asistirte en la notificación de mensajes al usuario armé una clase UserNotification, es simple , provee un método addMessage() para agregar mensajes, otro para recuperarlos getMessages(), y un último para borrar los ya leidos. Utiliza la HttpSession, y no el request, para almacenar los mensajes ya que a veces es necesario que los mensajes perduren mas allá de un request.
+
+
+Bueno Ezequiel, espero que mi explicación sea entendible y te sirva para mejorar el resto del trabajo: básicamente tenés que reducir la cantidad de servlets, mover la lógica de las JSP, pulir bien la lógica en los servlets, mejorar el emplea de HibernateSession en la capa de acceso a datos. No dudes en consultar cualquier duda.
+No he probado toda la aplicación, es posible que otras partes de la misma hayan dejado de funcionar a pesar de que tuve el cuidado de no "romper" el resto del código.
+
+Saludos,
+--Patricio
+
+p.d .: y un buen comienzo de año...jeje
